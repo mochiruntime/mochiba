@@ -1,6 +1,6 @@
-# Mochiba: EPFL Diagonale MOBA
+# Mochiba: Single-Lane MOBA
 
-A multiplayer single-lane MOBA set on the EPFL campus "Diagonale" thoroughfare, built with **TypeScript**, **Three.js**, and an authoritative **60 Hz Node.js WebSocket** game loop.
+A multiplayer single-lane MOBA built with **TypeScript**, **Three.js**, and an authoritative **60 Hz Node.js WebSocket** game loop.
 
 ## Architecture
 
@@ -19,7 +19,7 @@ A multiplayer single-lane MOBA set on the EPFL campus "Diagonale" thoroughfare, 
 │ • Free Look (Edge Pan)        │◄─────►│ • RTS Movement Step & Lane Clamping │
 │ • 'Z' Key Camera Lock         │ (WS)  │ • Snapshot Delta Broadcasting       │
 │ • Mouse Wheel Tactical Zoom   │       │ • Blue/Red Team Auto-Assignment     │
-│ • Right-Click Move Target     │       └─────────────────────────────────────┘
+│ • Right-Click Move & Attack   │       └─────────────────────────────────────┘
 └───────────────────────────────┘
 ```
 
@@ -53,7 +53,8 @@ npm run build
 ```
 
 ## Controls
-- **Right Click**: Move champion to clicked ground coordinate along the Diagonale (clicks outside the corridor are directionally clamped to the lane border).
+- **Right Click**: Move champion to clicked ground coordinate along the lane (clicks outside the corridor are directionally clamped to the lane border), or attack enemy champions.
+- **Q / W / E / R Keys**: Cast champion abilities directed toward cursor position.
 - **Edge Pan (Free Look)**: Move cursor to viewport edges to pan the camera across the map.
 - **Z Key**: Toggle camera lock (rigidly tracks player character; deactivates edge pan).
-- **Mouse Scroll**: Zoom in/out between tactical MOBA limits (50m – 160m).
+- **Mouse Scroll**: Zoom in/out between tactical MOBA limits.
