@@ -1,0 +1,19 @@
+{
+  "name": "@mochiba/client",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@mochiba/shared": "*",
+    "three": "^0.163.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.163.0",
+    "typescript": "^5.4.5",
+    "vite": "^5.2.0"
+  }
+}

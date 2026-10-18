@@ -1,0 +1,21 @@
+{
+  "name": "mochiba-root",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "shared",
+    "server",
+    "client"
+  ],
+  "scripts": {
+    "dev:server": "npm run dev --workspace=@mochiba/server",
+    "dev:client": "npm run dev --workspace=@mochiba/client",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "build": "npm run build --workspaces"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.5",
+    "vitest": "^1.5.0"
+  }
+}
