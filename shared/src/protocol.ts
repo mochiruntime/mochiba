@@ -97,4 +97,8 @@ export type ServerMessage =
   | { type: 'HELLO'; clientId: string; serverTickRate: number; team: Team; snapshot: WorldSnapshot }
   | { type: 'SNAPSHOT'; snapshot: WorldSnapshot };
 
+export type HelloMessage = Extract<ServerMessage, { type: 'HELLO' }>;
+export type SnapshotMessage = Extract<ServerMessage, { type: 'SNAPSHOT' }>;
+export type PongMessage = Extract<ServerMessage, { type: 'PONG' }>;
+
 export type NetworkMessage = ClientMessage | ServerMessage;

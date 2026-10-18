@@ -46,4 +46,11 @@ export class ClickIndicator {
     this.material.opacity = Math.max(0, 1 - progress);
     return true; // Still active
   }
+
+  dispose(): void {
+    if (this.mesh.parent) {
+      this.mesh.parent.remove(this.mesh);
+    }
+    this.material.dispose();
+  }
 }
