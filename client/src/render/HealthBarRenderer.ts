@@ -18,64 +18,81 @@ export class HealthBarRenderer {
 
   private currentText = '';
   private currentColor = '';
+  private materials: THREE.Material[] = [];
+
+  // Reusable static geometries shared across all health bars (zero per-instance geometry allocations)
+  private static frameWidth = 7.5 + 0.08 * 2;
+  private static frameHeight = 0.72 + 0.22 + 0.08 * 3;
+
+  private static bgGeo = new THREE.PlaneGeometry(HealthBarRenderer.frameWidth, HealthBarRenderer.frameHeight);
+  private static hpBgGeo = new THREE.PlaneGeometry(7.5, 0.72);
+  private static manaBgGeo = new THREE.PlaneGeometry(7.5, 0.22);
+
+  private static hpFillGeo: THREE.PlaneGeometry = (() => {
+    const geo = new THREE.PlaneGeometry(7.5, 0.72);
+    geo.translate(7.5 / 2, 0, 0); // Left-anchor
+    return geo;
+  })();
+
+  private static manaFillGeo: THREE.PlaneGeometry = (() => {
+    const geo = new THREE.PlaneGeometry(7.5, 0.22);
+    geo.translate(7.5 / 2, 0, 0); // Left-anchor
+    return geo;
+  })();
 
   constructor(public isAllied: boolean, public championName: string) {
     // 1. Dark Outlined Outer Background
-    const frameWidth = this.barWidth + this.borderPad * 2;
-    const frameHeight = this.barHeight + this.manaHeight + this.borderPad * 3;
-    const bgGeo = new THREE.PlaneGeometry(frameWidth, frameHeight);
     const bgMat = new THREE.MeshBasicMaterial({
       color: 0x070c12,
       side: THREE.DoubleSide,
       depthTest: false
     });
-    const bgMesh = new THREE.Mesh(bgGeo, bgMat);
+    this.materials.push(bgMat);
+    const bgMesh = new THREE.Mesh(HealthBarRenderer.bgGeo, bgMat);
     bgMesh.renderOrder = 998;
     this.group.add(bgMesh);
 
     // 2. Dark Trough for Health Bar
-    const hpBgGeo = new THREE.PlaneGeometry(this.barWidth, this.barHeight);
     const hpBgMat = new THREE.MeshBasicMaterial({ color: 0x16202a, depthTest: false });
-    const hpBgMesh = new THREE.Mesh(hpBgGeo, hpBgMat);
+    this.materials.push(hpBgMat);
+    const hpBgMesh = new THREE.Mesh(HealthBarRenderer.hpBgGeo, hpBgMat);
     hpBgMesh.position.set(0, (this.manaHeight + this.borderPad) / 2, 0.005);
     hpBgMesh.renderOrder = 999;
     this.group.add(hpBgMesh);
 
     // 3. Health Bar Fill
-    const hpGeo = new THREE.PlaneGeometry(this.barWidth, this.barHeight);
-    hpGeo.translate(this.barWidth / 2, 0, 0); // Anchor to left edge
     const hpMat = new THREE.MeshBasicMaterial({
       color: isAllied ? 0x2cd958 : 0xee3333,
       side: THREE.DoubleSide,
       depthTest: false
     });
-    this.hpFillMesh = new THREE.Mesh(hpGeo, hpMat);
+    this.materials.push(hpMat);
+    this.hpFillMesh = new THREE.Mesh(HealthBarRenderer.hpFillGeo, hpMat);
     this.hpFillMesh.position.set(-this.barWidth / 2, (this.manaHeight + this.borderPad) / 2, 0.01);
     this.hpFillMesh.renderOrder = 1000;
     this.group.add(this.hpFillMesh);
 
     // 4. Dark Trough for Mana Bar
-    const manaBgGeo = new THREE.PlaneGeometry(this.barWidth, this.manaHeight);
     const manaBgMat = new THREE.MeshBasicMaterial({ color: 0x0f1a28, depthTest: false });
-    const manaBgMesh = new THREE.Mesh(manaBgGeo, manaBgMat);
+    this.materials.push(manaBgMat);
+    const manaBgMesh = new THREE.Mesh(HealthBarRenderer.manaBgGeo, manaBgMat);
     manaBgMesh.position.set(0, -this.barHeight / 2, 0.005);
     manaBgMesh.renderOrder = 999;
     this.group.add(manaBgMesh);
 
     // 5. Mana Bar Fill
-    const manaGeo = new THREE.PlaneGeometry(this.barWidth, this.manaHeight);
-    manaGeo.translate(this.barWidth / 2, 0, 0); // Anchor to left edge
     const manaMat = new THREE.MeshBasicMaterial({
       color: 0x2b82ff,
       side: THREE.DoubleSide,
       depthTest: false
     });
-    this.manaFillMesh = new THREE.Mesh(manaGeo, manaMat);
+    this.materials.push(manaMat);
+    this.manaFillMesh = new THREE.Mesh(HealthBarRenderer.manaFillGeo, manaMat);
     this.manaFillMesh.position.set(-this.barWidth / 2, -this.barHeight / 2, 0.01);
     this.manaFillMesh.renderOrder = 1000;
     this.group.add(this.manaFillMesh);
 
-    // 6. Billboard Status & Name Tag (Ultra High-DPI Canvas Sprite, initialized in browser DOM environments)
+    // 6. Billboard Status & Name Tag (Ultra High-DPI Canvas Sprite)
     if (typeof document !== 'undefined') {
       this.statusCanvas = document.createElement('canvas');
       this.statusCanvas.width = 1024;
@@ -87,9 +104,10 @@ export class HealthBarRenderer {
         transparent: true,
         depthTest: false
       });
+      this.materials.push(spriteMat);
       this.statusSprite = new THREE.Sprite(spriteMat);
       this.statusSprite.scale.set(11.0, 2.75, 1.0);
-      this.statusSprite.position.set(0, frameHeight / 2 + 1.45, 0.02);
+      this.statusSprite.position.set(0, HealthBarRenderer.frameHeight / 2 + 1.45, 0.02);
       this.statusSprite.renderOrder = 1001;
       this.group.add(this.statusSprite);
 
@@ -99,9 +117,6 @@ export class HealthBarRenderer {
 
   /**
    * Updates world position, billboarding orientation, zoom-invariant screen scale, and vitals.
-   * @param state Authoritative champion state
-   * @param championWorldPos World coordinates of the champion
-   * @param camera Active perspective camera
    */
   update(
     state: ChampionState,
@@ -117,7 +132,6 @@ export class HealthBarRenderer {
     const distanceToCamera = Math.hypot(dx, dy, dz) || 100;
 
     // 2. Distance scale: keeps screen pixel size 100% constant regardless of zoom level
-    // Reference distance = 100m
     const zoomScale = Math.max(0.4, distanceToCamera / 100);
     this.group.scale.set(zoomScale, zoomScale, zoomScale);
 
@@ -192,5 +206,9 @@ export class HealthBarRenderer {
 
   dispose() {
     this.statusTexture?.dispose();
+    for (const mat of this.materials) {
+      mat.dispose();
+    }
+    this.materials.length = 0;
   }
 }

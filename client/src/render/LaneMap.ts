@@ -30,13 +30,19 @@ export class LaneMap {
   }
 
   private buildLane() {
+    const dx = this.mapConfig.redNexus.x - this.mapConfig.blueNexus.x;
+    const dz = this.mapConfig.redNexus.z - this.mapConfig.blueNexus.z;
+    const laneAngle = Math.atan2(dx, dz);
+    const centerX = (this.mapConfig.blueNexus.x + this.mapConfig.redNexus.x) / 2;
+    const centerZ = (this.mapConfig.blueNexus.z + this.mapConfig.redNexus.z) / 2;
+
     // The main lane stone corridor
     const laneGeo = new THREE.PlaneGeometry(
       this.mapConfig.laneWidth,
       this.mapConfig.laneLength
     );
     laneGeo.rotateX(-Math.PI / 2);
-    laneGeo.rotateY(-Math.PI / 4);
+    laneGeo.rotateY(laneAngle);
 
     const laneMat = new THREE.MeshStandardMaterial({
       color: 0xc4ccd3, // Clean light concrete / sandstone paving
@@ -44,7 +50,7 @@ export class LaneMap {
       metalness: 0.1
     });
     this.groundMesh = new THREE.Mesh(laneGeo, laneMat);
-    this.groundMesh.position.y = 0;
+    this.groundMesh.position.set(centerX, 0, centerZ);
     this.groundMesh.receiveShadow = true;
     this.group.add(this.groundMesh);
 
@@ -54,13 +60,13 @@ export class LaneMap {
       this.mapConfig.laneLength
     );
     borderGeo.rotateX(-Math.PI / 2);
-    borderGeo.rotateY(-Math.PI / 4);
+    borderGeo.rotateY(laneAngle);
     const borderMat = new THREE.MeshStandardMaterial({
       color: 0x8a95a1, // Granite border trim
       roughness: 0.8
     });
     const borderMesh = new THREE.Mesh(borderGeo, borderMat);
-    borderMesh.position.y = -0.05;
+    borderMesh.position.set(centerX, -0.05, centerZ);
     borderMesh.receiveShadow = true;
     this.group.add(borderMesh);
 

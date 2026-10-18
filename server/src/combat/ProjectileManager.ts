@@ -35,6 +35,15 @@ export class ProjectileManager {
 
   tick(dt: number, tickCount: number, targets: IProjectileTargetProvider, ctx: ICombatContext) {
     this.toRemove.clear();
+    const opposingCache = new Map<Team, ChampionState[]>();
+    const getOpposing = (team: Team) => {
+      let list = opposingCache.get(team);
+      if (!list) {
+        list = targets.getOpposingChampions(team);
+        opposingCache.set(team, list);
+      }
+      return list;
+    };
 
     for (const [id, proj] of this.projectiles) {
       if (proj.isOrbiting) {
@@ -155,7 +164,7 @@ export class ProjectileManager {
       // Check collision against opposing champions for skillshots
       if (proj.type === 'ECHO_ORB_OUT' || proj.type === 'ECHO_ORB_RETURN' || proj.type === 'CHARM_BOLT') {
         const hits = this.projectileHits.get(id);
-        const enemies = targets.getOpposingChampions(proj.team);
+        const enemies = getOpposing(proj.team);
         for (const enemy of enemies) {
           if (enemy.isAlive && !hits?.has(enemy.id)) {
             const d = Math.hypot(enemy.position.x - proj.position.x, enemy.position.z - proj.position.z);

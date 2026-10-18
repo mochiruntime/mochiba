@@ -6,10 +6,14 @@ export class ClickIndicator {
   private maxLife = 0.35; // 350ms duration
   private material: THREE.MeshBasicMaterial;
 
-  constructor(x: number, z: number, scene: THREE.Scene) {
+  // Shared unit ring geometry allocated once in memory
+  private static sharedRingGeo: THREE.RingGeometry = (() => {
     const geo = new THREE.RingGeometry(0.4, 0.9, 24);
     geo.rotateX(-Math.PI / 2);
+    return geo;
+  })();
 
+  constructor(x: number, z: number, scene: THREE.Scene) {
     this.material = new THREE.MeshBasicMaterial({
       color: 0x44ff88,
       transparent: true,
@@ -18,7 +22,7 @@ export class ClickIndicator {
       depthWrite: false
     });
 
-    this.mesh = new THREE.Mesh(geo, this.material);
+    this.mesh = new THREE.Mesh(ClickIndicator.sharedRingGeo, this.material);
     this.mesh.position.set(x, 0.08, z);
     scene.add(this.mesh);
   }
@@ -31,7 +35,7 @@ export class ClickIndicator {
       if (this.mesh.parent) {
         this.mesh.parent.remove(this.mesh);
       }
-      this.mesh.geometry.dispose();
+      // Dispose only per-instance material, preserving shared static geometry
       this.material.dispose();
       return false; // Finished
     }

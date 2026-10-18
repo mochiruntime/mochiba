@@ -333,8 +333,8 @@ export class ServerApp implements ICombatContext, IProjectileTargetProvider {
     return {
       tick: this.tickCount,
       timestamp: Date.now(),
-      champions: Array.from(this.players.values()).map((p) => ({ ...p.state })),
-      projectiles: Array.from(this.projectiles.values()).map((proj) => ({ ...proj }))
+      champions: Array.from(this.players.values(), (p) => p.state),
+      projectiles: Array.from(this.projectiles.values())
     };
   }
 

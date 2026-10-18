@@ -67,8 +67,27 @@ let currentPing = 0;
 const championMeshes = new Map<string, THREE.Group>();
 const championHealthBars = new Map<string, HealthBarRenderer>();
 const championBodyMeshes = new Map<THREE.Mesh, string>(); // Mesh -> championId for raycasting
+let cachedBodyMeshes: THREE.Mesh[] = [];
 const latestChampionStates = new Map<string, ChampionState>();
 let clickIndicators: ClickIndicator[] = [];
+
+function rebuildCachedBodyMeshes() {
+  cachedBodyMeshes = Array.from(championBodyMeshes.keys());
+}
+
+function disposeHierarchy(obj: THREE.Object3D) {
+  obj.traverse((child) => {
+    if ((child as THREE.Mesh).isMesh) {
+      const mesh = child as THREE.Mesh;
+      if (mesh.geometry) mesh.geometry.dispose();
+      if (Array.isArray(mesh.material)) {
+        mesh.material.forEach((mat) => mat.dispose());
+      } else if (mesh.material) {
+        mesh.material.dispose();
+      }
+    }
+  });
+}
 
 // 4. WebSocket Client (60Hz Synchronization)
 const urlParams = new URLSearchParams(window.location.search);
@@ -135,9 +154,11 @@ function syncChampions(champions: ChampionState[]) {
     if (!group || group.userData.championId !== champ.championId) {
       if (group) {
         scene.remove(group);
+        disposeHierarchy(group);
         for (const [m, id] of championBodyMeshes) {
           if (id === champ.id) championBodyMeshes.delete(m);
         }
+        rebuildCachedBodyMeshes();
       }
       group = createChampionMesh(champ);
       group.userData.championId = champ.championId;
@@ -164,7 +185,12 @@ function syncChampions(champions: ChampionState[]) {
   for (const [id, group] of championMeshes) {
     if (!seenIds.has(id)) {
       scene.remove(group);
+      disposeHierarchy(group);
       championMeshes.delete(id);
+      for (const [m, cId] of championBodyMeshes) {
+        if (cId === id) championBodyMeshes.delete(m);
+      }
+      rebuildCachedBodyMeshes();
       const hpBar = championHealthBars.get(id);
       if (hpBar) {
         scene.remove(hpBar.group);
@@ -198,6 +224,7 @@ function createChampionMesh(champ: ChampionState): THREE.Group {
   group.add(bodyMesh);
 
   championBodyMeshes.set(bodyMesh, champ.id);
+  rebuildCachedBodyMeshes();
 
   // Visor / direction pointer indicating facing angle
   const visorGeo = new THREE.BoxGeometry(0.8, 0.4, 0.8);
@@ -277,8 +304,7 @@ window.addEventListener('mousedown', (e) => {
     raycaster.setFromCamera(mouseVec2, camera);
 
     // 1. Check if clicking on an enemy champion mesh
-    const bodyMeshes = Array.from(championBodyMeshes.keys());
-    const champHits = raycaster.intersectObjects(bodyMeshes);
+    const champHits = raycaster.intersectObjects(cachedBodyMeshes);
 
     if (champHits.length > 0) {
       const clickedMesh = champHits[0].object as THREE.Mesh;
@@ -318,6 +344,7 @@ window.addEventListener('mousedown', (e) => {
 
 // 6. Game Loop (Update & Render)
 const clock = new THREE.Clock();
+let lastStatusText = '';
 
 function animate() {
   requestAnimationFrame(animate);
@@ -371,7 +398,11 @@ function animate() {
     ? `<span style="color:#66ffff;font-weight:bold;">${myChampDef.name}</span>`
     : '';
 
-  statusEl.innerHTML = `EPFL Diagonale MOBA (60Hz) | Hero: ${champTag} | Ping: ${currentPing}ms | Camera: ${lockStatus} | Zoom: ${zoomPct}%`;
+  const newStatusText = `EPFL Diagonale MOBA (60Hz) | Hero: ${champTag} | Ping: ${currentPing}ms | Camera: ${lockStatus} | Zoom: ${zoomPct}%`;
+  if (lastStatusText !== newStatusText) {
+    statusEl.innerHTML = newStatusText;
+    lastStatusText = newStatusText;
+  }
 
   renderer.render(scene, camera);
 }
