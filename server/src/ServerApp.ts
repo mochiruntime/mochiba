@@ -1,378 +1,94 @@
-import { WebSocketServer, WebSocket } from 'ws';
 import {
-  NetworkMessage,
   ClientMessage,
   ServerMessage,
-  ChampionState,
-  ProjectileState,
-  WorldSnapshot,
   Team,
-  CrowdControlType,
   MapConfig,
-  EPFL_DIAGONALE_MAP,
-  isInsideLane,
-  clampRayToLane
+  EPFL_DIAGONALE_MAP
 } from '@mochiba/shared';
-import { ICombatContext } from './champions/ChampionBehavior.js';
-import { championRegistry } from './champions/ChampionRegistry.js';
-import { ProjectileManager, IProjectileTargetProvider } from './combat/ProjectileManager.js';
+import { GameSimulation } from './simulation/GameSimulation.js';
+import { NetworkManager, ISocketLike } from './net/NetworkManager.js';
 
-export interface PlayerSession {
-  ws: { send: (data: string) => void; on: (event: string, cb: (data: any) => void) => void };
-  state: ChampionState;
-}
-
-export class ServerApp implements ICombatContext, IProjectileTargetProvider {
-  public wss: WebSocketServer | null = null;
+export class ServerApp {
   public readonly TICK_RATE = 60; // 60 Hz simulation tick
-  public players = new Map<string, PlayerSession>();
-  private projectileManager = new ProjectileManager();
-  public get projectiles(): Map<string, ProjectileState> {
-    return this.projectileManager.projectiles;
-  }
+  public readonly simulation: GameSimulation;
+  public readonly network: NetworkManager;
   private intervalId: NodeJS.Timeout | null = null;
-  private tickCount = 0;
   private playerCounter = 0;
 
-  constructor(public readonly mapConfig: MapConfig = EPFL_DIAGONALE_MAP) {}
-
-  start(port: number, host = '0.0.0.0'): Promise<void> {
-    return new Promise((resolve) => {
-      this.wss = new WebSocketServer({ port, host }, () => {
-        this.intervalId = setInterval(() => this.tick(), 1000 / this.TICK_RATE);
-        resolve();
-      });
-
-      this.wss.on('connection', (ws: WebSocket, req) => {
-        let champParam = 'kitsune';
-        try {
-          const url = new URL(req.url || '/', 'http://localhost');
-          champParam = url.searchParams.get('champion') || 'kitsune';
-        } catch {
-          // fallback
-        }
-        const clientId = this.handleConnection(ws, champParam);
-
-        ws.on('close', () => {
-          this.removePlayer(clientId);
-        });
-      });
-    });
-
+  constructor(public readonly mapConfig: MapConfig = EPFL_DIAGONALE_MAP) {
+    this.simulation = new GameSimulation(this.mapConfig);
+    this.network = new NetworkManager(
+      (clientId, champ, ws) => this.handleClientConnect(clientId, champ, ws),
+      (clientId, msg) => this.handleClientCommand(clientId, msg),
+      (clientId) => this.handleClientDisconnect(clientId)
+    );
   }
 
-  handleConnection(
-    ws: { send: (data: string) => void; on: (event: string, cb: (data: any) => void) => void },
-    requestedChampionId = 'kitsune'
-  ): string {
+  async start(port: number, host = '0.0.0.0'): Promise<void> {
+    await this.network.listen(port, host);
+    this.intervalId = setInterval(() => this.tick(), 1000 / this.TICK_RATE);
+  }
+
+  tick(): void {
+    const dt = 1 / this.TICK_RATE;
+    this.simulation.tick(dt);
+    this.network.broadcastSnapshot(this.simulation.createSnapshot());
+  }
+
+  async stop(): Promise<void> {
+    if (this.intervalId) {
+      clearInterval(this.intervalId);
+      this.intervalId = null;
+    }
+    await this.network.close();
+  }
+
+  private handleClientConnect(clientId: string, requestedChampion: string, _ws: ISocketLike): void {
     this.playerCounter++;
-    const clientId = `client_${this.playerCounter}_${Math.random().toString(36).substring(2, 6)}`;
-    const team: Team = this.players.size % 2 === 0 ? 'BLUE' : 'RED';
+    const team: Team = this.simulation.champions.size % 2 === 0 ? 'BLUE' : 'RED';
     const spawnPos = team === 'BLUE' ? this.mapConfig.blueNexus : this.mapConfig.redNexus;
 
-    const behavior = championRegistry.get(requestedChampionId);
-    const state: ChampionState = behavior.createInitialState(
+    this.simulation.addChampion(
       clientId,
+      requestedChampion,
       team,
       spawnPos,
       this.playerCounter
     );
-
-    this.players.set(clientId, { ws, state });
 
     const hello: ServerMessage = {
       type: 'HELLO',
       clientId,
       serverTickRate: this.TICK_RATE,
       team,
-      snapshot: this.createSnapshot()
+      snapshot: this.simulation.createSnapshot()
     };
-    ws.send(JSON.stringify(hello));
-
-    ws.on('message', (data: any) => {
-      try {
-        const msg: ClientMessage = JSON.parse(data.toString());
-        this.handleMessage(clientId, msg);
-      } catch {
-        // Ignore malformed packets
-      }
-    });
-
-    return clientId;
+    this.network.send(clientId, hello);
   }
 
-  handleMessage(clientId: string, msg: ClientMessage) {
-    const session = this.players.get(clientId);
-    if (!session) return;
-    const champ = session.state;
-
+  private handleClientCommand(clientId: string, msg: ClientMessage): void {
     if (msg.type === 'PING') {
       const pong: ServerMessage = {
         type: 'PONG',
         clientTime: msg.clientTime,
         serverTime: Date.now()
       };
-      session.ws.send(JSON.stringify(pong));
+      this.network.send(clientId, pong);
     } else if (msg.type === 'MOVE_COMMAND') {
-      // Ignore move commands while dead or under crowd control
-      if (!champ.isAlive || champ.crowdControl) return;
-
-      const from = champ.position;
-      const clamped = clampRayToLane(this.mapConfig, from, msg.target);
-      champ.targetPosition = clamped;
+      this.simulation.handleMoveCommand(clientId, msg.target);
     } else if (msg.type === 'ATTACK_TARGET') {
-      if (!champ.isAlive || champ.crowdControl) return;
-      const targetSession = this.players.get(msg.targetId);
-      if (!targetSession || !targetSession.state.isAlive || targetSession.state.team === champ.team) {
-        return;
-      }
-      const behavior = championRegistry.get(champ.championId);
-      behavior.onBasicAttack(champ, targetSession.state, this);
+      this.simulation.handleAttackCommand(clientId, msg.targetId);
     } else if (msg.type === 'CAST_SPELL') {
-      if (!champ.isAlive || champ.crowdControl) return;
-      const behavior = championRegistry.get(champ.championId);
-      behavior.onCastSpell(champ, msg.spell, msg.target, this);
+      this.simulation.handleCastSpell(clientId, msg.spell, msg.target);
     } else if (msg.type === 'SELECT_CHAMPION') {
-      if (!championRegistry.has(msg.championId)) return;
-      const behavior = championRegistry.get(msg.championId);
+      const champ = this.simulation.champions.get(clientId);
+      if (!champ) return;
       const spawnPos = champ.team === 'BLUE' ? this.mapConfig.blueNexus : this.mapConfig.redNexus;
-      session.state = behavior.createInitialState(
-        champ.id,
-        champ.team,
-        spawnPos,
-        this.playerCounter
-      );
+      this.simulation.handleSelectChampion(clientId, msg.championId, spawnPos, this.playerCounter);
     }
   }
 
-  // --- ICombatContext Implementation ---
-
-  spawnProjectile(data: Omit<ProjectileState, 'id'>): ProjectileState {
-    return this.projectileManager.spawn(data);
-  }
-
-  getOpposingChampions(team: Team): ChampionState[] {
-    const list: ChampionState[] = [];
-    for (const [, { state }] of this.players) {
-      if (state.team !== team && state.isAlive) {
-        list.push(state);
-      }
-    }
-    return list;
-  }
-
-  findNearestEnemy(champ: ChampionState, range: number): ChampionState | null {
-    let nearest: ChampionState | null = null;
-    let minDist = range;
-
-    for (const [, { state }] of this.players) {
-      if (state.id !== champ.id && state.team !== champ.team && state.isAlive) {
-        const d = Math.hypot(state.position.x - champ.position.x, state.position.z - champ.position.z);
-        if (d < minDist) {
-          minDist = d;
-          nearest = state;
-        }
-      }
-    }
-    return nearest;
-  }
-
-  findEnemiesInRange(champ: ChampionState, range: number, maxCount = 3): ChampionState[] {
-    const enemies: { enemy: ChampionState; dist: number }[] = [];
-    for (const [, { state }] of this.players) {
-      if (state.id !== champ.id && state.team !== champ.team && state.isAlive) {
-        const d = Math.hypot(state.position.x - champ.position.x, state.position.z - champ.position.z);
-        if (d <= range) {
-          enemies.push({ enemy: state, dist: d });
-        }
-      }
-    }
-    enemies.sort((a, b) => a.dist - b.dist);
-    return enemies.slice(0, maxCount).map((e) => e.enemy);
-  }
-
-  dealDamage(sourceId: string, targetId: string, amount: number): void {
-    const target = this.players.get(targetId)?.state;
-    if (!target || !target.isAlive) return;
-    this.applyDamage(target, amount, sourceId);
-  }
-
-  applyCrowdControl(targetId: string, type: CrowdControlType, duration: number, sourceId: string): void {
-    const target = this.players.get(targetId)?.state;
-    if (!target || !target.isAlive) return;
-    target.crowdControl = { type, remainingDuration: duration, sourceId };
-    target.targetPosition = null;
-  }
-
-  isPlayerAlive(id: string): boolean {
-    return this.players.get(id)?.state.isAlive ?? false;
-  }
-
-  getPlayerState(id: string): ChampionState | undefined {
-    return this.players.get(id)?.state;
-  }
-
-  removePlayer(clientId: string) {
-    this.players.delete(clientId);
-    this.projectileManager.cleanupPlayer(clientId);
-  }
-
-  tick() {
-    this.tickCount++;
-    const dt = 1 / this.TICK_RATE;
-
-    // 1. Tick cooldowns, behavior updates, crowd control & respawn timers for all champions
-    for (const [, { state }] of this.players) {
-      this.tickCooldowns(state, dt);
-
-      // Champion-specific behavioral tick
-      const behavior = championRegistry.get(state.championId);
-      behavior.onTick(state, dt, this);
-
-      if (!state.isAlive) {
-        this.tickRespawn(state, dt);
-        continue;
-      }
-
-      const isUnderCC = this.tickCrowdControl(state, dt);
-      if (!isUnderCC) {
-        this.tickMovement(state, dt);
-      }
-    }
-
-    // 2. Advance projectiles & handle collisions via ProjectileManager
-    this.projectileManager.tick(dt, this.tickCount, this, this);
-
-    // 3. Broadcast 60Hz world snapshot with champions & projectiles
-    this.broadcastSnapshot();
-  }
-
-  private tickCooldowns(state: ChampionState, dt: number): void {
-    if (state.cooldowns.q > 0) state.cooldowns.q = Math.max(0, state.cooldowns.q - dt);
-    if (state.cooldowns.w > 0) state.cooldowns.w = Math.max(0, state.cooldowns.w - dt);
-    if (state.cooldowns.e > 0) state.cooldowns.e = Math.max(0, state.cooldowns.e - dt);
-    if (state.cooldowns.r > 0) state.cooldowns.r = Math.max(0, state.cooldowns.r - dt);
-    if (state.cooldowns.basicAttack > 0) state.cooldowns.basicAttack = Math.max(0, state.cooldowns.basicAttack - dt);
-  }
-
-  private tickRespawn(state: ChampionState, dt: number): void {
-    state.respawnTimer = Math.max(0, state.respawnTimer - dt);
-    if (state.respawnTimer === 0) {
-      // Respawn at team Nexus
-      state.isAlive = true;
-      state.health = state.maxHealth;
-      state.mana = state.maxMana;
-      state.crowdControl = null;
-      state.targetPosition = null;
-      const nexus = state.team === 'BLUE' ? this.mapConfig.blueNexus : this.mapConfig.redNexus;
-      state.position = { x: nexus.x, z: nexus.z };
-    }
-  }
-
-  private tickCrowdControl(state: ChampionState, dt: number): boolean {
-    if (!state.crowdControl) return false;
-
-    state.crowdControl.remainingDuration -= dt;
-    if (state.crowdControl.remainingDuration <= 0) {
-      state.crowdControl = null;
-      state.targetPosition = null;
-      return false;
-    }
-
-    if (state.crowdControl.type === 'CHARMED') {
-      // Force walk toward the caster at 50% speed
-      const source = this.players.get(state.crowdControl.sourceId)?.state;
-      if (source && source.isAlive) {
-        const dx = source.position.x - state.position.x;
-        const dz = source.position.z - state.position.z;
-        const dist = Math.hypot(dx, dz);
-        if (dist > 1) {
-          const step = (state.speed * 0.5) * dt;
-          state.position.x += (dx / dist) * step;
-          state.position.z += (dz / dist) * step;
-          state.rotation = Math.atan2(dx, dz);
-        }
-      }
-    }
-    return true; // CC overrides standard movement
-  }
-
-  private tickMovement(state: ChampionState, dt: number): void {
-    if (!state.targetPosition) return;
-
-    const dx = state.targetPosition.x - state.position.x;
-    const dz = state.targetPosition.z - state.position.z;
-    const dist = Math.hypot(dx, dz);
-    const step = state.speed * dt;
-
-    if (dist <= step || dist < 0.2) {
-      state.position.x = state.targetPosition.x;
-      state.position.z = state.targetPosition.z;
-      state.targetPosition = null;
-    } else {
-      const nextX = state.position.x + (dx / dist) * step;
-      const nextZ = state.position.z + (dz / dist) * step;
-
-      if (isInsideLane(this.mapConfig, nextX, nextZ)) {
-        state.position.x = nextX;
-        state.position.z = nextZ;
-        state.rotation = Math.atan2(dx, dz);
-      } else {
-        state.targetPosition = null;
-      }
-    }
-  }
-
-  private broadcastSnapshot(): void {
-    const snapshotMsg: ServerMessage = {
-      type: 'SNAPSHOT',
-      snapshot: this.createSnapshot()
-    };
-    const payload = JSON.stringify(snapshotMsg);
-
-    for (const [, { ws }] of this.players) {
-      try {
-        ws.send(payload);
-      } catch {
-        // Handle socket disconnect gracefully
-      }
-    }
-  }
-
-  private applyDamage(target: ChampionState, damage: number, _sourceId: string) {
-    if (!target.isAlive) return;
-
-    target.health = Math.max(0, target.health - damage);
-
-    if (target.health === 0) {
-      target.isAlive = false;
-      target.respawnTimer = 8.0;
-      target.targetPosition = null;
-      target.crowdControl = null;
-    }
-  }
-
-  createSnapshot(): WorldSnapshot {
-    return {
-      tick: this.tickCount,
-      timestamp: Date.now(),
-      champions: Array.from(this.players.values(), (p) => p.state),
-      projectiles: Array.from(this.projectiles.values())
-    };
-  }
-
-  stop(): Promise<void> {
-    return new Promise((resolve) => {
-      if (this.intervalId) clearInterval(this.intervalId);
-      if (this.wss) {
-        this.wss.close(() => resolve());
-      } else {
-        resolve();
-      }
-    });
-  }
-
-  get currentTick(): number {
-    return this.tickCount;
+  private handleClientDisconnect(clientId: string): void {
+    this.simulation.removeChampion(clientId);
   }
 }

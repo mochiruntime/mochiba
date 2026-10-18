@@ -4,11 +4,11 @@ import { CameraController } from './camera/CameraController.js';
 import { ClickIndicator } from './render/ClickIndicator.js';
 import { ChampionRenderer } from './render/ChampionRenderer.js';
 import { ProjectileRenderer } from './render/ProjectileRenderer.js';
+import { registerKitsuneProjectileVisuals } from './champions/kitsune/kitsuneProjectileVisuals.js';
 import { SkillHUD } from './ui/SkillHUD.js';
 import {
   EPFL_DIAGONALE_MAP,
   clampRayToLane,
-  NetworkMessage,
   ServerMessage,
   ClientMessage,
   ChampionState,
@@ -60,6 +60,7 @@ scene.add(laneMap.group);
 const cameraController = new CameraController(camera);
 const championRenderer = new ChampionRenderer(scene);
 const projectileRenderer = new ProjectileRenderer(scene);
+registerKitsuneProjectileVisuals(projectileRenderer);
 const skillHUD = new SkillHUD();
 
 // 3. State Registries

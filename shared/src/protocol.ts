@@ -1,5 +1,11 @@
 export type Team = 'BLUE' | 'RED';
 
+export interface Vector2D {
+  x: number;
+  z: number;
+}
+export type Position = Vector2D;
+
 export type CrowdControlType = 'CHARMED' | 'SLOWED' | 'STUNNED';
 
 export interface CrowdControlState {
@@ -16,11 +22,21 @@ export type ProjectileType =
   | 'CHARM_BOLT'
   | 'ASTRAL_SURGE_BOLT';
 
+export type ProjectileTrajectory = 'LINEAR' | 'HOMING' | 'BOOMERANG' | 'ORBITING';
+
 export interface ProjectileState {
   id: string;
   ownerId: string;
   team: Team;
-  type: ProjectileType;
+  type: ProjectileType | string;
+  trajectory?: ProjectileTrajectory;
+  speed?: number;
+  piercesUnits?: boolean;
+  crowdControlOnHit?: {
+    type: CrowdControlType;
+    duration: number;
+  };
+  visualId?: string;
   position: { x: number; z: number };
   velocity: { x: number; z: number };
   targetId?: string; // For homing attacks (Basic, W, R)

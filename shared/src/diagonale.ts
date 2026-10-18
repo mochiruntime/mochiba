@@ -1,5 +1,5 @@
-import { MapConfig, LandmarkBuilding } from './map/types.js';
-export { MapConfig, LandmarkBuilding } from './map/types.js';
+import { MapConfig } from './map/types.js';
+export type { MapConfig, LandmarkBuilding } from './map/types.js';
 export { isInsideLane, clampRayToLane, clampToLane } from './map/laneGeometry.js';
 
 /**

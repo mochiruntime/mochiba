@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { MapConfig, EPFL_DIAGONALE_MAP } from '@mochiba/shared';
+import { type MapConfig, EPFL_DIAGONALE_MAP } from '@mochiba/shared';
 
 export class LaneMap {
   public group = new THREE.Group();

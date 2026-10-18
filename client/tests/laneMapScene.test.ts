@@ -42,6 +42,7 @@ describe('Three.js LaneMap (Automated Scene Graph Test)', () => {
 
   it('ensures no campus building intersects with the lane corridor', () => {
     const map = new LaneMap(EPFL_DIAGONALE_MAP);
+    expect(map.buildingMeshes.length).toBe(EPFL_DIAGONALE_MAP.buildings.length);
     const halfLaneWidth = EPFL_DIAGONALE_MAP.laneWidth / 2;
 
     for (const b of EPFL_DIAGONALE_MAP.buildings) {

@@ -1,12 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import * as THREE from 'three';
 import { ProjectileRenderer } from '../src/render/ProjectileRenderer.js';
+import { registerKitsuneProjectileVisuals } from '../src/champions/kitsune/kitsuneProjectileVisuals.js';
 import { ProjectileState } from '@mochiba/shared';
 
 describe('ProjectileRenderer', () => {
   it('creates and adds meshes for all projectile types', () => {
     const scene = new THREE.Scene();
     const renderer = new ProjectileRenderer(scene);
+    registerKitsuneProjectileVisuals(renderer);
 
     const projs: ProjectileState[] = [
       {
@@ -87,6 +89,7 @@ describe('ProjectileRenderer', () => {
   it('updates projectile positions and removes expired ones', () => {
     const scene = new THREE.Scene();
     const renderer = new ProjectileRenderer(scene);
+    registerKitsuneProjectileVisuals(renderer);
 
     const initial: ProjectileState[] = [
       {
@@ -170,5 +173,67 @@ describe('ProjectileRenderer', () => {
     renderer.dispose();
     expect(renderer.meshes.size).toBe(0);
     expect(scene.children.length).toBe(0);
+  });
+
+  it('allows registering custom projectile visual factories', () => {
+    const scene = new THREE.Scene();
+    const renderer = new ProjectileRenderer(scene);
+
+    let customFactoryCalled = false;
+    renderer.registerFactory('CUSTOM_FIREBALL', (_proj) => {
+      customFactoryCalled = true;
+      const group = new THREE.Group();
+      group.name = 'CustomFireballGroup';
+      return group;
+    });
+
+    expect(renderer.hasFactory('CUSTOM_FIREBALL')).toBe(true);
+
+    renderer.sync([
+      {
+        id: 'fireball_1',
+        type: 'CUSTOM_FIREBALL',
+        visualId: 'CUSTOM_FIREBALL',
+        ownerId: 'player1',
+        team: 'RED',
+        position: { x: 5, z: 5 },
+        velocity: { x: 1, z: 0 },
+        radius: 1.0,
+        damage: 100,
+        maxDistance: 30,
+        distanceTraveled: 0
+      }
+    ]);
+
+    expect(customFactoryCalled).toBe(true);
+    const mesh = renderer.meshes.get('fireball_1');
+    expect(mesh).toBeDefined();
+    expect(mesh!.name).toBe('CustomFireballGroup');
+  });
+
+  it('falls back safely to default bolt mesh for unknown visual IDs', () => {
+    const scene = new THREE.Scene();
+    const renderer = new ProjectileRenderer(scene);
+
+    renderer.sync([
+      {
+        id: 'unknown_proj',
+        type: 'MYSTERIOUS_SPELL',
+        visualId: 'UNKNOWN_ID_123',
+        ownerId: 'player1',
+        team: 'BLUE',
+        position: { x: 0, z: 0 },
+        velocity: { x: 0, z: 0 },
+        radius: 0.5,
+        damage: 10,
+        maxDistance: 10,
+        distanceTraveled: 0
+      }
+    ]);
+
+    expect(renderer.meshes.size).toBe(1);
+    const mesh = renderer.meshes.get('unknown_proj');
+    expect(mesh).toBeDefined();
+    expect(scene.children.length).toBe(1);
   });
 });
