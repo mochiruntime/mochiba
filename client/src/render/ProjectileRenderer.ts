@@ -1,5 +1,91 @@
 import * as THREE from 'three';
-import { ProjectileState } from '@mochiba/shared';
+import { ProjectileState, ProjectileType } from '@mochiba/shared';
+
+export type ProjectileMeshFactory = (proj: ProjectileState) => THREE.Group;
+
+// Shared unit geometries cached in memory to avoid GPU buffer reallocations on every projectile spawn
+const unitSphere16 = new THREE.SphereGeometry(1, 16, 16);
+const unitSphere12 = new THREE.SphereGeometry(1, 12, 12);
+const unitSphere8 = new THREE.SphereGeometry(1, 8, 8);
+const unitRing = new THREE.RingGeometry(0.8, 1.6, 16);
+const unitCone = new THREE.ConeGeometry(1, 2.0, 8);
+unitCone.rotateX(Math.PI / 2);
+
+// Shared materials cached in memory to avoid shader re-compilations & GPU churn
+const echoOrbCoreMat = new THREE.MeshBasicMaterial({ color: 0x00ffff });
+const echoOrbAuraMat = new THREE.MeshBasicMaterial({
+  color: 0x66ffff,
+  transparent: true,
+  opacity: 0.4,
+  wireframe: true
+});
+const spectralEmberMat = new THREE.MeshBasicMaterial({ color: 0x33eeff });
+const charmCoreMat = new THREE.MeshBasicMaterial({ color: 0xff33bb });
+const charmHaloMat = new THREE.MeshBasicMaterial({
+  color: 0xff66cc,
+  transparent: true,
+  opacity: 0.6,
+  side: THREE.DoubleSide
+});
+const astralSurgeMat = new THREE.MeshBasicMaterial({ color: 0x4466ff });
+const basicAttackMat = new THREE.MeshBasicMaterial({ color: 0xffdd44 });
+
+function createEchoOrbMesh(proj: ProjectileState): THREE.Group {
+  const group = new THREE.Group();
+  const core = new THREE.Mesh(unitSphere16, echoOrbCoreMat);
+  core.scale.setScalar(proj.radius);
+  group.add(core);
+
+  const aura = new THREE.Mesh(unitSphere12, echoOrbAuraMat);
+  aura.scale.setScalar(proj.radius * 1.4);
+  group.add(aura);
+  return group;
+}
+
+function createSpectralEmberMesh(proj: ProjectileState): THREE.Group {
+  const group = new THREE.Group();
+  const mesh = new THREE.Mesh(unitSphere12, spectralEmberMat);
+  mesh.scale.setScalar(proj.radius);
+  group.add(mesh);
+  return group;
+}
+
+function createCharmBoltMesh(proj: ProjectileState): THREE.Group {
+  const group = new THREE.Group();
+  const core = new THREE.Mesh(unitSphere16, charmCoreMat);
+  core.scale.setScalar(proj.radius);
+  group.add(core);
+
+  const halo = new THREE.Mesh(unitRing, charmHaloMat);
+  halo.scale.setScalar(proj.radius);
+  group.add(halo);
+  return group;
+}
+
+function createAstralSurgeBoltMesh(proj: ProjectileState): THREE.Group {
+  const group = new THREE.Group();
+  const mesh = new THREE.Mesh(unitCone, astralSurgeMat);
+  mesh.scale.setScalar(proj.radius);
+  group.add(mesh);
+  return group;
+}
+
+function createBasicAttackMesh(proj: ProjectileState): THREE.Group {
+  const group = new THREE.Group();
+  const mesh = new THREE.Mesh(unitSphere8, basicAttackMat);
+  mesh.scale.setScalar(proj.radius);
+  group.add(mesh);
+  return group;
+}
+
+export const PROJECTILE_VISUAL_FACTORIES: Record<ProjectileType, ProjectileMeshFactory> = {
+  ECHO_ORB_OUT: createEchoOrbMesh,
+  ECHO_ORB_RETURN: createEchoOrbMesh,
+  SPECTRAL_EMBER: createSpectralEmberMesh,
+  CHARM_BOLT: createCharmBoltMesh,
+  ASTRAL_SURGE_BOLT: createAstralSurgeBoltMesh,
+  BASIC_ATTACK: createBasicAttackMesh
+};
 
 export class ProjectileRenderer {
   public meshes = new Map<string, THREE.Group>();
@@ -32,58 +118,8 @@ export class ProjectileRenderer {
   }
 
   private createProjectileMesh(proj: ProjectileState): THREE.Group {
-    const group = new THREE.Group();
-
-    if (proj.type === 'ECHO_ORB_OUT' || proj.type === 'ECHO_ORB_RETURN') {
-      // Q — Echo Orb (Glowing Cyan Energy Sphere)
-      const coreGeo = new THREE.SphereGeometry(proj.radius, 16, 16);
-      const coreMat = new THREE.MeshBasicMaterial({ color: 0x00ffff });
-      const coreMesh = new THREE.Mesh(coreGeo, coreMat);
-      group.add(coreMesh);
-
-      // Outer aura
-      const auraGeo = new THREE.SphereGeometry(proj.radius * 1.4, 12, 12);
-      const auraMat = new THREE.MeshBasicMaterial({
-        color: 0x66ffff,
-        transparent: true,
-        opacity: 0.4,
-        wireframe: true
-      });
-      group.add(new THREE.Mesh(auraGeo, auraMat));
-    } else if (proj.type === 'SPECTRAL_EMBER') {
-      // W — Spectral Ember (Blue/Teal Spirit Flame)
-      const geo = new THREE.SphereGeometry(proj.radius, 12, 12);
-      const mat = new THREE.MeshBasicMaterial({ color: 0x33eeff });
-      group.add(new THREE.Mesh(geo, mat));
-    } else if (proj.type === 'CHARM_BOLT') {
-      // E — Charm Bolt (Vibrant Magenta Heart/Energy Orb)
-      const geo = new THREE.SphereGeometry(proj.radius, 16, 16);
-      const mat = new THREE.MeshBasicMaterial({ color: 0xff33bb });
-      group.add(new THREE.Mesh(geo, mat));
-
-      // Glow halo
-      const haloGeo = new THREE.RingGeometry(proj.radius * 0.8, proj.radius * 1.6, 16);
-      const haloMat = new THREE.MeshBasicMaterial({
-        color: 0xff66cc,
-        transparent: true,
-        opacity: 0.6,
-        side: THREE.DoubleSide
-      });
-      const haloMesh = new THREE.Mesh(haloGeo, haloMat);
-      group.add(haloMesh);
-    } else if (proj.type === 'ASTRAL_SURGE_BOLT') {
-      // R — Astral Surge Bolt (Royal Blue Dash Bolt)
-      const geo = new THREE.ConeGeometry(proj.radius, 1.6, 8);
-      geo.rotateX(Math.PI / 2);
-      const mat = new THREE.MeshBasicMaterial({ color: 0x4466ff });
-      group.add(new THREE.Mesh(geo, mat));
-    } else {
-      // Basic Attack: Magic Golden Spark
-      const geo = new THREE.SphereGeometry(proj.radius, 8, 8);
-      const mat = new THREE.MeshBasicMaterial({ color: 0xffdd44 });
-      group.add(new THREE.Mesh(geo, mat));
-    }
-
+    const factory = PROJECTILE_VISUAL_FACTORIES[proj.type] ?? createBasicAttackMesh;
+    const group = factory(proj);
     group.position.set(proj.position.x, 1.4, proj.position.z);
     return group;
   }
