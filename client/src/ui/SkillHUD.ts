@@ -1,13 +1,22 @@
 import { ChampionState, ChampionDefinition, KITSUNE_CHAMPION } from '@mochiba/shared';
 
+interface SlotUI {
+  container: HTMLElement;
+  keyLabel: HTMLElement;
+  nameLabel: HTMLElement;
+  overlay: HTMLElement;
+  lastCdText: string;
+  lastDisplay: string;
+}
+
 export class SkillHUD {
   private container: HTMLDivElement;
   private currentDef: ChampionDefinition = KITSUNE_CHAMPION;
   private slots: {
-    q: HTMLElement;
-    w: HTMLElement;
-    e: HTMLElement;
-    r: HTMLElement;
+    q: SlotUI;
+    w: SlotUI;
+    e: SlotUI;
+    r: SlotUI;
   };
 
   constructor() {
@@ -40,17 +49,14 @@ export class SkillHUD {
     this.configureSlot(this.slots.r, 'R', def.skills.R.name, def.skills.R.color, def.skills.R.description);
   }
 
-  private configureSlot(slot: HTMLElement, key: string, name: string, color: string, description: string) {
-    slot.style.borderColor = color;
-    slot.title = `${name}: ${description}`;
-    const nameLabel = slot.children[1] as HTMLElement;
-    if (nameLabel) {
-      nameLabel.innerText = name;
-      nameLabel.style.color = color;
-    }
+  private configureSlot(slot: SlotUI, _key: string, name: string, color: string, description: string) {
+    slot.container.style.borderColor = color;
+    slot.container.title = `${name}: ${description}`;
+    slot.nameLabel.innerText = name;
+    slot.nameLabel.style.color = color;
   }
 
-  private createSlot(key: string, name: string, color: string, description: string): HTMLElement {
+  private createSlot(key: string, name: string, color: string, description: string): SlotUI {
     const slot = document.createElement('div');
     slot.style.width = '64px';
     slot.style.height = '64px';
@@ -99,7 +105,15 @@ export class SkillHUD {
     slot.appendChild(overlay);
 
     this.container.appendChild(slot);
-    return slot;
+
+    return {
+      container: slot,
+      keyLabel,
+      nameLabel,
+      overlay,
+      lastCdText: '',
+      lastDisplay: 'none'
+    };
   }
 
   update(champ?: ChampionState) {
@@ -110,31 +124,53 @@ export class SkillHUD {
     this.updateSlotCD(this.slots.e, champ.cooldowns.e);
 
     // R slot with charges if champion has a multi-charge ultimate
-    const rOverlay = this.slots.r.querySelector('.cd-overlay') as HTMLElement;
-    const rName = this.slots.r.children[1] as HTMLElement;
     const rDef = this.currentDef.skills.R;
 
     if (champ.cooldowns.r > 0) {
-      rOverlay.style.display = 'flex';
-      rOverlay.innerText = champ.cooldowns.r.toFixed(1);
-      rName.innerText = rDef.name;
+      if (this.slots.r.lastDisplay !== 'flex') {
+        this.slots.r.overlay.style.display = 'flex';
+        this.slots.r.lastDisplay = 'flex';
+      }
+      const text = champ.cooldowns.r.toFixed(1);
+      if (this.slots.r.lastCdText !== text) {
+        this.slots.r.overlay.innerText = text;
+        this.slots.r.lastCdText = text;
+      }
+      if (this.slots.r.nameLabel.innerText !== rDef.name) {
+        this.slots.r.nameLabel.innerText = rDef.name;
+      }
     } else {
-      rOverlay.style.display = 'none';
-      if (rDef.maxCharges) {
-        rName.innerText = `${rDef.name.substring(0, 6)} (${champ.rCharges}/${rDef.maxCharges})`;
-      } else {
-        rName.innerText = rDef.name;
+      if (this.slots.r.lastDisplay !== 'none') {
+        this.slots.r.overlay.style.display = 'none';
+        this.slots.r.lastDisplay = 'none';
+        this.slots.r.lastCdText = '';
+      }
+      const targetName = rDef.maxCharges
+        ? `${rDef.name.substring(0, 6)} (${champ.rCharges}/${rDef.maxCharges})`
+        : rDef.name;
+      if (this.slots.r.nameLabel.innerText !== targetName) {
+        this.slots.r.nameLabel.innerText = targetName;
       }
     }
   }
 
-  private updateSlotCD(slot: HTMLElement, cd: number) {
-    const overlay = slot.querySelector('.cd-overlay') as HTMLElement;
+  private updateSlotCD(slot: SlotUI, cd: number) {
     if (cd > 0) {
-      overlay.style.display = 'flex';
-      overlay.innerText = cd.toFixed(1);
+      if (slot.lastDisplay !== 'flex') {
+        slot.overlay.style.display = 'flex';
+        slot.lastDisplay = 'flex';
+      }
+      const text = cd.toFixed(1);
+      if (slot.lastCdText !== text) {
+        slot.overlay.innerText = text;
+        slot.lastCdText = text;
+      }
     } else {
-      overlay.style.display = 'none';
+      if (slot.lastDisplay !== 'none') {
+        slot.overlay.style.display = 'none';
+        slot.lastDisplay = 'none';
+        slot.lastCdText = '';
+      }
     }
   }
 

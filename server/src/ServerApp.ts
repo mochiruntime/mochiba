@@ -8,6 +8,7 @@ import {
   WorldSnapshot,
   Team,
   CrowdControlType,
+  MapConfig,
   EPFL_DIAGONALE_MAP,
   isInsideLane,
   clampRayToLane
@@ -32,6 +33,8 @@ export class ServerApp implements ICombatContext, IProjectileTargetProvider {
   private intervalId: NodeJS.Timeout | null = null;
   private tickCount = 0;
   private playerCounter = 0;
+
+  constructor(public readonly mapConfig: MapConfig = EPFL_DIAGONALE_MAP) {}
 
   start(port: number, host = '0.0.0.0'): Promise<void> {
     return new Promise((resolve) => {
@@ -65,7 +68,7 @@ export class ServerApp implements ICombatContext, IProjectileTargetProvider {
     this.playerCounter++;
     const clientId = `client_${this.playerCounter}_${Math.random().toString(36).substring(2, 6)}`;
     const team: Team = this.players.size % 2 === 0 ? 'BLUE' : 'RED';
-    const spawnPos = team === 'BLUE' ? EPFL_DIAGONALE_MAP.blueNexus : EPFL_DIAGONALE_MAP.redNexus;
+    const spawnPos = team === 'BLUE' ? this.mapConfig.blueNexus : this.mapConfig.redNexus;
 
     const behavior = championRegistry.get(requestedChampionId);
     const state: ChampionState = behavior.createInitialState(
@@ -115,7 +118,7 @@ export class ServerApp implements ICombatContext, IProjectileTargetProvider {
       if (!champ.isAlive || champ.crowdControl) return;
 
       const from = champ.position;
-      const clamped = clampRayToLane(EPFL_DIAGONALE_MAP, from, msg.target);
+      const clamped = clampRayToLane(this.mapConfig, from, msg.target);
       champ.targetPosition = clamped;
     } else if (msg.type === 'ATTACK_TARGET') {
       if (!champ.isAlive || champ.crowdControl) return;
@@ -132,7 +135,7 @@ export class ServerApp implements ICombatContext, IProjectileTargetProvider {
     } else if (msg.type === 'SELECT_CHAMPION') {
       if (!championRegistry.has(msg.championId)) return;
       const behavior = championRegistry.get(msg.championId);
-      const spawnPos = champ.team === 'BLUE' ? EPFL_DIAGONALE_MAP.blueNexus : EPFL_DIAGONALE_MAP.redNexus;
+      const spawnPos = champ.team === 'BLUE' ? this.mapConfig.blueNexus : this.mapConfig.redNexus;
       session.state = behavior.createInitialState(
         champ.id,
         champ.team,
@@ -220,80 +223,20 @@ export class ServerApp implements ICombatContext, IProjectileTargetProvider {
 
     // 1. Tick cooldowns, behavior updates, crowd control & respawn timers for all champions
     for (const [, { state }] of this.players) {
-      // Cooldowns
-      if (state.cooldowns.q > 0) state.cooldowns.q = Math.max(0, state.cooldowns.q - dt);
-      if (state.cooldowns.w > 0) state.cooldowns.w = Math.max(0, state.cooldowns.w - dt);
-      if (state.cooldowns.e > 0) state.cooldowns.e = Math.max(0, state.cooldowns.e - dt);
-      if (state.cooldowns.r > 0) state.cooldowns.r = Math.max(0, state.cooldowns.r - dt);
-      if (state.cooldowns.basicAttack > 0) state.cooldowns.basicAttack = Math.max(0, state.cooldowns.basicAttack - dt);
+      this.tickCooldowns(state, dt);
 
       // Champion-specific behavioral tick
       const behavior = championRegistry.get(state.championId);
       behavior.onTick(state, dt, this);
 
-      // Respawn timer
       if (!state.isAlive) {
-        state.respawnTimer = Math.max(0, state.respawnTimer - dt);
-        if (state.respawnTimer === 0) {
-          // Respawn at team Nexus
-          state.isAlive = true;
-          state.health = state.maxHealth;
-          state.mana = state.maxMana;
-          state.crowdControl = null;
-          state.targetPosition = null;
-          const nexus = state.team === 'BLUE' ? EPFL_DIAGONALE_MAP.blueNexus : EPFL_DIAGONALE_MAP.redNexus;
-          state.position = { x: nexus.x, z: nexus.z };
-        }
+        this.tickRespawn(state, dt);
         continue;
       }
 
-      // Crowd control (Charm or Slow)
-      if (state.crowdControl) {
-        state.crowdControl.remainingDuration -= dt;
-        if (state.crowdControl.remainingDuration <= 0) {
-          state.crowdControl = null;
-          state.targetPosition = null;
-        } else if (state.crowdControl.type === 'CHARMED') {
-          // Force walk toward the caster at 50% speed
-          const source = this.players.get(state.crowdControl.sourceId)?.state;
-          if (source && source.isAlive) {
-            const dx = source.position.x - state.position.x;
-            const dz = source.position.z - state.position.z;
-            const dist = Math.hypot(dx, dz);
-            if (dist > 1) {
-              const step = (state.speed * 0.5) * dt;
-              state.position.x += (dx / dist) * step;
-              state.position.z += (dz / dist) * step;
-              state.rotation = Math.atan2(dx, dz);
-            }
-          }
-          continue; // CC overrides standard movement
-        }
-      }
-
-      // Standard movement along the lane
-      if (state.targetPosition) {
-        const dx = state.targetPosition.x - state.position.x;
-        const dz = state.targetPosition.z - state.position.z;
-        const dist = Math.hypot(dx, dz);
-        const step = state.speed * dt;
-
-        if (dist <= step || dist < 0.2) {
-          state.position.x = state.targetPosition.x;
-          state.position.z = state.targetPosition.z;
-          state.targetPosition = null;
-        } else {
-          const nextX = state.position.x + (dx / dist) * step;
-          const nextZ = state.position.z + (dz / dist) * step;
-
-          if (isInsideLane(EPFL_DIAGONALE_MAP, nextX, nextZ)) {
-            state.position.x = nextX;
-            state.position.z = nextZ;
-            state.rotation = Math.atan2(dx, dz);
-          } else {
-            state.targetPosition = null;
-          }
-        }
+      const isUnderCC = this.tickCrowdControl(state, dt);
+      if (!isUnderCC) {
+        this.tickMovement(state, dt);
       }
     }
 
@@ -301,6 +244,86 @@ export class ServerApp implements ICombatContext, IProjectileTargetProvider {
     this.projectileManager.tick(dt, this.tickCount, this, this);
 
     // 3. Broadcast 60Hz world snapshot with champions & projectiles
+    this.broadcastSnapshot();
+  }
+
+  private tickCooldowns(state: ChampionState, dt: number): void {
+    if (state.cooldowns.q > 0) state.cooldowns.q = Math.max(0, state.cooldowns.q - dt);
+    if (state.cooldowns.w > 0) state.cooldowns.w = Math.max(0, state.cooldowns.w - dt);
+    if (state.cooldowns.e > 0) state.cooldowns.e = Math.max(0, state.cooldowns.e - dt);
+    if (state.cooldowns.r > 0) state.cooldowns.r = Math.max(0, state.cooldowns.r - dt);
+    if (state.cooldowns.basicAttack > 0) state.cooldowns.basicAttack = Math.max(0, state.cooldowns.basicAttack - dt);
+  }
+
+  private tickRespawn(state: ChampionState, dt: number): void {
+    state.respawnTimer = Math.max(0, state.respawnTimer - dt);
+    if (state.respawnTimer === 0) {
+      // Respawn at team Nexus
+      state.isAlive = true;
+      state.health = state.maxHealth;
+      state.mana = state.maxMana;
+      state.crowdControl = null;
+      state.targetPosition = null;
+      const nexus = state.team === 'BLUE' ? this.mapConfig.blueNexus : this.mapConfig.redNexus;
+      state.position = { x: nexus.x, z: nexus.z };
+    }
+  }
+
+  private tickCrowdControl(state: ChampionState, dt: number): boolean {
+    if (!state.crowdControl) return false;
+
+    state.crowdControl.remainingDuration -= dt;
+    if (state.crowdControl.remainingDuration <= 0) {
+      state.crowdControl = null;
+      state.targetPosition = null;
+      return false;
+    }
+
+    if (state.crowdControl.type === 'CHARMED') {
+      // Force walk toward the caster at 50% speed
+      const source = this.players.get(state.crowdControl.sourceId)?.state;
+      if (source && source.isAlive) {
+        const dx = source.position.x - state.position.x;
+        const dz = source.position.z - state.position.z;
+        const dist = Math.hypot(dx, dz);
+        if (dist > 1) {
+          const step = (state.speed * 0.5) * dt;
+          state.position.x += (dx / dist) * step;
+          state.position.z += (dz / dist) * step;
+          state.rotation = Math.atan2(dx, dz);
+        }
+      }
+    }
+    return true; // CC overrides standard movement
+  }
+
+  private tickMovement(state: ChampionState, dt: number): void {
+    if (!state.targetPosition) return;
+
+    const dx = state.targetPosition.x - state.position.x;
+    const dz = state.targetPosition.z - state.position.z;
+    const dist = Math.hypot(dx, dz);
+    const step = state.speed * dt;
+
+    if (dist <= step || dist < 0.2) {
+      state.position.x = state.targetPosition.x;
+      state.position.z = state.targetPosition.z;
+      state.targetPosition = null;
+    } else {
+      const nextX = state.position.x + (dx / dist) * step;
+      const nextZ = state.position.z + (dz / dist) * step;
+
+      if (isInsideLane(this.mapConfig, nextX, nextZ)) {
+        state.position.x = nextX;
+        state.position.z = nextZ;
+        state.rotation = Math.atan2(dx, dz);
+      } else {
+        state.targetPosition = null;
+      }
+    }
+  }
+
+  private broadcastSnapshot(): void {
     const snapshotMsg: ServerMessage = {
       type: 'SNAPSHOT',
       snapshot: this.createSnapshot()

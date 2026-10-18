@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { LaneMap } from './render/LaneMap.js';
 import { CameraController } from './camera/CameraController.js';
 import { ClickIndicator } from './render/ClickIndicator.js';
-import { HealthBarRenderer } from './render/HealthBarRenderer.js';
+import { ChampionRenderer } from './render/ChampionRenderer.js';
 import { ProjectileRenderer } from './render/ProjectileRenderer.js';
 import { SkillHUD } from './ui/SkillHUD.js';
 import {
@@ -53,41 +53,19 @@ scene.add(sunLight);
 
 scene.add(new THREE.AmbientLight(0xffffff, 0.2));
 
-// 2. Map, Camera & Combat Renderers
+// 2. Map, Camera, Champions & Combat Renderers
 const laneMap = new LaneMap(EPFL_DIAGONALE_MAP);
 scene.add(laneMap.group);
 
 const cameraController = new CameraController(camera);
+const championRenderer = new ChampionRenderer(scene);
 const projectileRenderer = new ProjectileRenderer(scene);
 const skillHUD = new SkillHUD();
 
-// 3. State & Mesh Registries
+// 3. State Registries
 let myPlayerId: string | null = null;
 let currentPing = 0;
-const championMeshes = new Map<string, THREE.Group>();
-const championHealthBars = new Map<string, HealthBarRenderer>();
-const championBodyMeshes = new Map<THREE.Mesh, string>(); // Mesh -> championId for raycasting
-let cachedBodyMeshes: THREE.Mesh[] = [];
-const latestChampionStates = new Map<string, ChampionState>();
 let clickIndicators: ClickIndicator[] = [];
-
-function rebuildCachedBodyMeshes() {
-  cachedBodyMeshes = Array.from(championBodyMeshes.keys());
-}
-
-function disposeHierarchy(obj: THREE.Object3D) {
-  obj.traverse((child) => {
-    if ((child as THREE.Mesh).isMesh) {
-      const mesh = child as THREE.Mesh;
-      if (mesh.geometry) mesh.geometry.dispose();
-      if (Array.isArray(mesh.material)) {
-        mesh.material.forEach((mat) => mat.dispose());
-      } else if (mesh.material) {
-        mesh.material.dispose();
-      }
-    }
-  });
-}
 
 // 4. WebSocket Client (60Hz Synchronization)
 const urlParams = new URLSearchParams(window.location.search);
@@ -107,11 +85,22 @@ ws.onopen = () => {
   }, 1000);
 };
 
+function handleSnapshotChampions(champions: ChampionState[]) {
+  championRenderer.sync(champions, myPlayerId);
+
+  const myChamp = myPlayerId ? champions.find((c) => c.id === myPlayerId) : undefined;
+  if (myChamp && myChamp.championId !== currentChampionId) {
+    currentChampionId = myChamp.championId;
+    const def = getChampionDefinition(currentChampionId);
+    skillHUD.setChampion(def);
+  }
+}
+
 ws.onmessage = (event) => {
   const msg: ServerMessage = JSON.parse(event.data);
   if (msg.type === 'HELLO') {
     myPlayerId = msg.clientId;
-    syncChampions(msg.snapshot.champions);
+    handleSnapshotChampions(msg.snapshot.champions);
     projectileRenderer.sync(msg.snapshot.projectiles);
 
     // Snap camera to spawned hero position
@@ -121,7 +110,7 @@ ws.onmessage = (event) => {
       cameraController.focus.z = myChamp.position.z;
     }
   } else if (msg.type === 'SNAPSHOT') {
-    syncChampions(msg.snapshot.champions);
+    handleSnapshotChampions(msg.snapshot.champions);
     projectileRenderer.sync(msg.snapshot.projectiles);
   } else if (msg.type === 'PONG') {
     currentPing = Date.now() - msg.clientTime;
@@ -132,121 +121,6 @@ ws.onclose = () => {
   if (pingInterval) clearInterval(pingInterval);
   statusEl.innerText = 'Disconnected from server.';
 };
-
-function syncChampions(champions: ChampionState[]) {
-  const seenIds = new Set<string>();
-  const myChamp = myPlayerId ? champions.find((c) => c.id === myPlayerId) : undefined;
-  const myTeam = myChamp?.team;
-
-  if (myChamp && myChamp.championId !== currentChampionId) {
-    currentChampionId = myChamp.championId;
-    const def = getChampionDefinition(currentChampionId);
-    skillHUD.setChampion(def);
-  }
-
-  for (const champ of champions) {
-    seenIds.add(champ.id);
-    latestChampionStates.set(champ.id, champ);
-
-    let group = championMeshes.get(champ.id);
-    let healthBar = championHealthBars.get(champ.id);
-
-    if (!group || group.userData.championId !== champ.championId) {
-      if (group) {
-        scene.remove(group);
-        disposeHierarchy(group);
-        for (const [m, id] of championBodyMeshes) {
-          if (id === champ.id) championBodyMeshes.delete(m);
-        }
-        rebuildCachedBodyMeshes();
-      }
-      group = createChampionMesh(champ);
-      group.userData.championId = champ.championId;
-      scene.add(group);
-      championMeshes.set(champ.id, group);
-    }
-
-    if (!healthBar) {
-      const isAllied = myTeam ? champ.team === myTeam : champ.id === myPlayerId;
-      healthBar = new HealthBarRenderer(isAllied, champ.name);
-      scene.add(healthBar.group);
-      championHealthBars.set(champ.id, healthBar);
-    }
-
-    // Hide champion model if dead
-    group.visible = champ.isAlive;
-
-    // Health bar stays visible even during death to show respawn timer
-    healthBar.group.visible = true;
-    healthBar.update(champ, group.position, camera);
-  }
-
-  // Remove disconnected champions
-  for (const [id, group] of championMeshes) {
-    if (!seenIds.has(id)) {
-      scene.remove(group);
-      disposeHierarchy(group);
-      championMeshes.delete(id);
-      for (const [m, cId] of championBodyMeshes) {
-        if (cId === id) championBodyMeshes.delete(m);
-      }
-      rebuildCachedBodyMeshes();
-      const hpBar = championHealthBars.get(id);
-      if (hpBar) {
-        scene.remove(hpBar.group);
-        hpBar.dispose();
-        championHealthBars.delete(id);
-      }
-      latestChampionStates.delete(id);
-    }
-  }
-}
-
-function createChampionMesh(champ: ChampionState): THREE.Group {
-  const group = new THREE.Group();
-  group.userData.championId = champ.championId;
-
-  const isBlue = champ.team === 'BLUE';
-
-  // Capsule body
-  const radius = 1.0;
-  const height = 1.8;
-  const bodyGeo = new THREE.CapsuleGeometry(radius, height, 8, 16);
-  const bodyMat = new THREE.MeshStandardMaterial({
-    color: isBlue ? 0x2288ff : 0xff3344,
-    roughness: 0.3,
-    metalness: 0.2
-  });
-  const bodyMesh = new THREE.Mesh(bodyGeo, bodyMat);
-  bodyMesh.position.y = (height / 2) + radius;
-  bodyMesh.castShadow = true;
-  bodyMesh.receiveShadow = true;
-  group.add(bodyMesh);
-
-  championBodyMeshes.set(bodyMesh, champ.id);
-  rebuildCachedBodyMeshes();
-
-  // Visor / direction pointer indicating facing angle
-  const visorGeo = new THREE.BoxGeometry(0.8, 0.4, 0.8);
-  const visorMat = new THREE.MeshStandardMaterial({ color: 0xffe066, roughness: 0.2 });
-  const visorMesh = new THREE.Mesh(visorGeo, visorMat);
-  visorMesh.position.set(0, bodyMesh.position.y + 0.3, radius * 0.9);
-  group.add(visorMesh);
-
-  // Ground selection ring
-  const ringGeo = new THREE.RingGeometry(1.2, 1.35, 24);
-  ringGeo.rotateX(-Math.PI / 2);
-  const ringMat = new THREE.MeshBasicMaterial({
-    color: isBlue ? 0x88ccff : 0xff8899,
-    side: THREE.DoubleSide
-  });
-  const ringMesh = new THREE.Mesh(ringGeo, ringMat);
-  ringMesh.position.y = 0.05;
-  group.add(ringMesh);
-
-  group.position.set(champ.position.x, 0, champ.position.z);
-  return group;
-}
 
 // 5. Input Handling: RTS Right Click, Ability Keys (Q, W, E, R), Camera Controls
 let currentMouseX = window.innerWidth / 2;
@@ -304,13 +178,13 @@ window.addEventListener('mousedown', (e) => {
     raycaster.setFromCamera(mouseVec2, camera);
 
     // 1. Check if clicking on an enemy champion mesh
-    const champHits = raycaster.intersectObjects(cachedBodyMeshes);
+    const champHits = raycaster.intersectObjects(championRenderer.getRaycastMeshes());
 
     if (champHits.length > 0) {
       const clickedMesh = champHits[0].object as THREE.Mesh;
-      const targetChampId = championBodyMeshes.get(clickedMesh);
-      const myChamp = myPlayerId ? latestChampionStates.get(myPlayerId) : undefined;
-      const targetChamp = targetChampId ? latestChampionStates.get(targetChampId) : undefined;
+      const targetChampId = championRenderer.getChampionIdByMesh(clickedMesh);
+      const myChamp = myPlayerId ? championRenderer.getLatestState(myPlayerId) : undefined;
+      const targetChamp = targetChampId ? championRenderer.getLatestState(targetChampId) : undefined;
 
       // If clicked on an opposing champion, trigger Basic Attack!
       if (myChamp && targetChamp && targetChamp.team !== myChamp.team && targetChamp.isAlive) {
@@ -327,7 +201,7 @@ window.addEventListener('mousedown', (e) => {
     // 2. Otherwise, ground move command with directional ray clamping
     const hit = raycaster.ray.intersectPlane(groundPlane, groundIntersection);
     if (hit) {
-      const myChamp = myPlayerId ? latestChampionStates.get(myPlayerId) : undefined;
+      const myChamp = myPlayerId ? championRenderer.getLatestState(myPlayerId) : undefined;
       const from = myChamp ? myChamp.position : { x: 0, z: 0 };
 
       const clamped = clampRayToLane(EPFL_DIAGONALE_MAP, from, { x: hit.x, z: hit.z });
@@ -350,7 +224,7 @@ function animate() {
   requestAnimationFrame(animate);
   const dt = clock.getDelta();
 
-  const myChamp = myPlayerId ? latestChampionStates.get(myPlayerId) : undefined;
+  const myChamp = myPlayerId ? championRenderer.getLatestState(myPlayerId) : undefined;
   const myPos = myChamp ? { x: myChamp.position.x, z: myChamp.position.z } : undefined;
 
   // Update Camera
@@ -364,19 +238,7 @@ function animate() {
   );
 
   // Smoothly interpolate champion positions & update health bars
-  for (const [id, group] of championMeshes) {
-    const state = latestChampionStates.get(id);
-    if (state) {
-      group.position.x = THREE.MathUtils.lerp(group.position.x, state.position.x, Math.min(1, dt * 25));
-      group.position.z = THREE.MathUtils.lerp(group.position.z, state.position.z, Math.min(1, dt * 25));
-      group.rotation.y = state.rotation;
-
-      const hpBar = championHealthBars.get(id);
-      if (hpBar) {
-        hpBar.update(state, group.position, camera);
-      }
-    }
-  }
+  championRenderer.update(dt, camera);
 
   // Update HUD
   skillHUD.update(myChamp);

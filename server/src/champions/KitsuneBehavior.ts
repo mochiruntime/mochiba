@@ -10,6 +10,7 @@ import { BaseChampionBehavior, ICombatContext } from './ChampionBehavior.js';
 
 export class KitsuneBehavior extends BaseChampionBehavior {
   readonly definition: ChampionDefinition = KITSUNE_CHAMPION;
+  private speedBoostTimers = new Map<string, number>();
 
   createInitialState(
     id: string,
@@ -98,9 +99,7 @@ export class KitsuneBehavior extends BaseChampionBehavior {
   protected onCastW(champ: ChampionState, _target: { x: number; z: number }, ctx: ICombatContext): void {
     champ.cooldowns.w = this.definition.skills.W.cooldown;
     champ.speed = this.definition.baseSpeed * 1.4; // +40% speed boost
-    setTimeout(() => {
-      if (champ) champ.speed = this.definition.baseSpeed;
-    }, 2000);
+    this.speedBoostTimers.set(champ.id, 2.0);
 
     const orbitRadius = 2.0;
     for (let i = 0; i < 3; i++) {
@@ -207,6 +206,18 @@ export class KitsuneBehavior extends BaseChampionBehavior {
   }
 
   override onTick(champ: ChampionState, dt: number, _ctx: ICombatContext): void {
+    // Tick speed boost duration deterministically
+    const remainingBoost = this.speedBoostTimers.get(champ.id);
+    if (remainingBoost !== undefined) {
+      const next = remainingBoost - dt;
+      if (next <= 0 || !champ.isAlive) {
+        this.speedBoostTimers.delete(champ.id);
+        champ.speed = this.definition.baseSpeed;
+      } else {
+        this.speedBoostTimers.set(champ.id, next);
+      }
+    }
+
     if (champ.rWindowRemaining > 0) {
       champ.rWindowRemaining -= dt;
       if (champ.rWindowRemaining <= 0) {
